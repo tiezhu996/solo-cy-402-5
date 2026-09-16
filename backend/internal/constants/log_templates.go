@@ -32,4 +32,19 @@ const (
 	LogUploadFileFailed        = "upload file failed"
 	LogRateLimitHit            = "rate limit hit"
 	LogCommentCreateFailed     = "unused comment template"
+
+	// 利益冲突检查日志模板
+	LogConflictSubmitHit       = "conflict check submit hit"
+	LogConflictSubmitNoHit     = "conflict check submit no hit"
+	LogConflictSubmitFailed    = "conflict check submit failed"
+	LogConflictIdempotentReuse = "conflict check duplicate submit collapsed to unique record"
+	LogConflictReleaseSuccess  = "conflict check release success"
+	LogConflictReleaseFailed   = "conflict check release failed"
+	LogConflictRejectSuccess   = "conflict check reject success"
+	LogConflictRejectFailed    = "conflict check reject failed"
+	LogConflictInvalidated     = "conflict check released decision invalidated because profile changed"
+	LogConflictRevalidateStale = "conflict check read revalidated stale decision"
+	LogPartyUpsertSuccess      = "case party upsert success"
+	LogPartyUpdateSuccess      = "case party update success"
+	LogPartyVersionBump        = "case party version bumped, invalidating bound decisions"
 )

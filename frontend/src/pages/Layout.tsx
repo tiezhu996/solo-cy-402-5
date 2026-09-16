@@ -5,6 +5,7 @@ import { useAuthStore } from '@/stores/authStore'
 
 const items = [
   { key: '/cases', label: '案件列表' },
+  { key: '/conflict-checks', label: '利益冲突' },
   { key: '/clients', label: '客户管理' },
   { key: '/billing', label: '费用中心' },
   { key: '/documents', label: '文档中心' },

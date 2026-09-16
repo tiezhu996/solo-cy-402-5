@@ -17,4 +17,11 @@ const (
 	CodeBillingStatusConflict = 40902
 	CodeUploadTooLarge        = 41300
 	CodeUnsupportedType       = 41500
+
+	// 利益冲突检查分段 46xxx
+	CodeConflictHit           = 40903 // 命中现存未结案件对方档案，须待复核
+	CodeConflictStateConflict = 40904 // 当前状态不允许该流转
+	CodeConflictBasisRequired = 42210 // 放行/驳回必须填写依据
+	CodeConflictDecisionStale = 40905 // 绑定档案已变化，旧结论失效
+	CodePartyNotFound         = 40410
 )

@@ -76,3 +76,71 @@ export interface PageResult<T> {
   page: number
   page_size: number
 }
+
+export interface OurParty {
+  name: string
+  id_number?: string
+  contact?: string
+  party_role?: string
+}
+
+export interface PartySnapshot {
+  party_id: number
+  case_id: number
+  case_no: string
+  case_title: string
+  case_status: string
+  side: string
+  name: string
+  id_number: string
+  contact: string
+  party_role: string
+  version: number
+  fingerprint: string
+  matched_by: string
+}
+
+export interface ConflictCheck {
+  id: number
+  check_no: string
+  case_title: string
+  our_parties: OurParty[]
+  opp_name: string
+  opp_id_number: string
+  identity_key: string
+  norm_opp_name: string
+  norm_opp_id: string
+  status: string
+  hit_count: number
+  matched_snapshot: PartySnapshot[]
+  bound_party_version: number
+  bound_fingerprint: string
+  review_by_id: number
+  review_by_name: string
+  review_basis: string
+  reviewed_at: string | null
+  invalidated_reason: string
+  submit_by_id: number
+  submit_by_name: string
+  created_at: string
+  updated_at: string
+  live_match: boolean
+  live_snapshot?: PartySnapshot[]
+  can_proceed: boolean
+  stale: boolean
+}
+
+export interface CaseParty {
+  id: number
+  case_id: number
+  side: string
+  name: string
+  id_number: string
+  contact: string
+  party_role: string
+  norm_name: string
+  norm_id: string
+  version: number
+  created_at: string
+  updated_at: string
+}

@@ -46,6 +46,13 @@ func (s *SeedService) Seed() error {
 		{CaseNo: "CY20260001", Title: "华信科技买卖合同纠纷", CaseType: constants.CaseTypeCommercial, Status: constants.CaseStatusInvestigating, ClientID: 1, LeadLawyerID: 2, CoLawyerIDs: co, Summary: "货款催收与合同违约赔偿。"},
 		{CaseNo: "CY20260002", Title: "陈晓明民间借贷纠纷", CaseType: constants.CaseTypeCivil, Status: constants.CaseStatusFiled, ClientID: 2, LeadLawyerID: 2, Summary: "借款 50 万元及利息追偿。"},
 	}
+	// 案件当事人档案：未结案件登记本方与对方，供新案利益冲突命中（version 从 1 起）。
+	parties := []model.CaseParty{
+		{CaseID: 1, Side: model.PartySideOur, Name: "深圳华信科技有限公司", IDNumber: "91440300MA5XXXXX1", Contact: "王经理 13900000001", PartyRole: "原告客户", NormName: "深圳华信科技有限公司", NormID: "91440300MA5XXXXX1", Version: 1},
+		{CaseID: 1, Side: model.PartySideOpposing, Name: "广州恒达物流有限公司", IDNumber: "91440100MA7HDXXX2", Contact: "赵总 13700000001", PartyRole: "被告", NormName: "广州恒达物流有限公司", NormID: "91440100MA7HDXXX2", Version: 1},
+		{CaseID: 2, Side: model.PartySideOur, Name: "陈晓明", IDNumber: "440300199001011234", Contact: "陈先生 13900000002", PartyRole: "原告客户", NormName: "陈晓明", NormID: "440300199001011234", Version: 1},
+		{CaseID: 2, Side: model.PartySideOpposing, Name: "王大明", IDNumber: "440300198505056789", Contact: "王先生 13600000002", PartyRole: "被告", NormName: "王大明", NormID: "440300198505056789", Version: 1},
+	}
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		for i := range users {
 			if err := tx.Create(&users[i]).Error; err != nil {
@@ -55,6 +62,12 @@ func (s *SeedService) Seed() error {
 		for i := range cases {
 			cases[i].AcceptDate = &now
 			if err := tx.Create(&cases[i]).Error; err != nil {
+				return err
+			}
+		}
+		for i := range parties {
+			parties[i].CreatedAt = now
+			if err := tx.Create(&parties[i]).Error; err != nil {
 				return err
 			}
 		}

@@ -25,18 +25,21 @@ type Router struct {
 	billing  *handler.BillingHandler
 	upload   *handler.UploadHandler
 	auditLog *handler.AuditLogHandler
+	conflict *handler.ConflictHandler
 }
 
 // New 构造路由装配器。
 func New(cfg *config.Config, db *gorm.DB, logger *slog.Logger,
 	user *handler.UserHandler, client *handler.ClientHandler, caseH *handler.CaseHandler,
 	document *handler.DocumentHandler, billing *handler.BillingHandler,
-	upload *handler.UploadHandler, auditLog *handler.AuditLogHandler) *Router {
+	upload *handler.UploadHandler, auditLog *handler.AuditLogHandler,
+	conflictH *handler.ConflictHandler) *Router {
 	return &Router{
 		cfg: cfg, db: db, logger: logger,
 		limiter: middleware.NewRateLimiter(cfg.RateLimitPerMinute),
 		user:    user, client: client, caseH: caseH,
 		document: document, billing: billing, upload: upload, auditLog: auditLog,
+		conflict: conflictH,
 	}
 }
 
@@ -66,6 +69,7 @@ func (r *Router) Setup() *gin.Engine {
 	r.registerBillingRoutes(v1)
 	r.registerAuditLogRoutes(v1)
 	r.registerUploadRoutes(v1)
+	r.registerConflictRoutes(v1)
 	return engine
 }
 

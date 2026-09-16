@@ -37,10 +37,13 @@ func appErrorStatus(code int) int {
 		return http.StatusForbidden
 	case constants.CodeNotFound:
 		return http.StatusNotFound
-	case constants.CodeConflict, constants.CodeCaseStatusConflict, constants.CodeBillingStatusConflict:
+	case constants.CodeConflict, constants.CodeCaseStatusConflict, constants.CodeBillingStatusConflict,
+		constants.CodeConflictHit, constants.CodeConflictStateConflict, constants.CodeConflictDecisionStale:
 		return http.StatusConflict
-	case constants.CodeValidationFailed:
+	case constants.CodeValidationFailed, constants.CodeConflictBasisRequired:
 		return http.StatusUnprocessableEntity
+	case constants.CodePartyNotFound:
+		return http.StatusNotFound
 	case constants.CodeTooManyRequests:
 		return http.StatusTooManyRequests
 	case constants.CodeUploadTooLarge:

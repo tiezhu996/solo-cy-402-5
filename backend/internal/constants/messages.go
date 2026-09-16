@@ -23,4 +23,13 @@ const (
 	MsgBillingPaid           = "账单已标记支付"
 	MsgBillingInvoiced       = "账单已开票"
 	MsgBillingVoided         = "账单已作废"
+
+	// 利益冲突检查文案（前端提示/后端返回/日志共用，修改一处影响全链路）
+	MsgConflictHit            = "命中事务所现存未结案件的对方档案，已保存为待复核，需管理员放行"
+	MsgConflictNoHit          = "未命中现存未结案件对方档案，可正常办理"
+	MsgConflictReleased       = "管理员已填写依据并放行"
+	MsgConflictRejected       = "管理员已驳回，该新案不得办理"
+	MsgConflictBasisRequired  = "放行或驳回必须填写审查依据"
+	MsgConflictStale          = "绑定的对方档案已发生变化，原放行结论已失效，需重新复核"
+	MsgConflictDecisionClosed = "当前冲突结论已终态，不能重复审查"
 )

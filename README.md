@@ -63,26 +63,27 @@ cy-402/
 │   ├── cmd/server/main.go
 │   └── internal/
 │       ├── config/
-│       ├── model/                 # user/client/case/document/billing/audit_log
-│       ├── repository/            # 按实体分文件
-│       ├── service/               # 业务逻辑 + 种子数据 + 单元测试
-│       ├── handler/               # HTTP 处理器（含 upload_handler、audit_log_handler）
-│       ├── router/                # router.go + 按实体分文件
+│       ├── model/                 # user/client/case/document/billing/audit_log/case_party/conflict_check
+│       ├── repository/            # 按实体分文件（含 case_party、conflict_check）
+│       ├── service/               # 业务逻辑 + 种子数据 + 单元测试（含 conflict_service/case_party_service）
+│       ├── handler/               # HTTP 处理器（含 upload_handler、audit_log_handler、conflict_handler）
+│       ├── router/                # router.go + 按实体分文件（含 conflicts.go）
 │       ├── middleware/            # auth/rbac/rate_limiter/error_handler/audit_log/cors/request_logger
 │       ├── dto/
-│       ├── constants/             # 枚举、错误码、日志模板、文案
+│       ├── constants/             # 枚举、错误码、日志模板、文案（含 conflict.go）
+│       ├── conflict/              # 冲突匹配/归一化/指纹/版本失效/状态收口纯逻辑（含表驱动测试）
 │       └── util/                  # jwt/logger/formatters/amount_formatter/app_error/file_upload
 └── frontend/
     └── src/
-        ├── api/                   # auth/user/client/case/document/billing/auditLog/upload
-        ├── stores/                # authStore/userStore/clientStore/caseStore/documentStore/billingStore
+        ├── api/                   # auth/user/client/case/document/billing/auditLog/upload/conflict
+        ├── stores/                # authStore/userStore/clientStore/caseStore/documentStore/billingStore/conflictStore
         ├── types/
-        ├── components/common/     # CaseCard/DocumentList/StatusBadge/TimelineItem/AmountSummary/ClientCard/CaseTable/BillingCard/DocumentCard/FileUploader/FilterBar/AvatarUploader/PermissionGuard
+        ├── components/common/     # CaseCard/DocumentList/StatusBadge/TimelineItem/AmountSummary/ClientCard/CaseTable/BillingCard/DocumentCard/FileUploader/FilterBar/AvatarUploader/PermissionGuard/ConflictStatusBadge
         ├── hooks/                 # useAuth/usePagination/useFileUpload/usePermission
-        ├── pages/                 # Cases/CaseDetail/Clients/Billing/Documents/Profile/AuditLogs/Login
+        ├── pages/                 # Cases/CaseDetail/Clients/Billing/Documents/Profile/AuditLogs/ConflictChecks/Login
         ├── router/                # index.tsx + guards.tsx
         ├── utils/                 # dateFormat/amountFormatter/request
-        └── constants/             # case/billing/document/errorCodes
+        └── constants/             # case/billing/document/conflict/errorCodes
 ```
 
 ## 环境变量
@@ -125,6 +126,11 @@ cy-402/
 - 后端：`backend/internal/constants/billing.go`、`backend/internal/model/billing.go`、`backend/internal/service/billing_service.go`、`backend/internal/util/formatters.go`、`backend/internal/constants/log_templates.go`、`backend/internal/constants/error_codes.go`、`database/init.sql`
 - 前端：`frontend/src/constants/billing.ts`、`frontend/src/components/common/StatusBadge.tsx`、`frontend/src/components/common/AmountSummary.tsx`、`frontend/src/components/common/BillingCard.tsx`、`frontend/src/pages/Billing.tsx`
 
+### ConflictStatus（no_conflict/pending_review/released/rejected/invalidated）
+- 后端：`backend/internal/constants/conflict.go`、`backend/internal/conflict/core.go`（状态收口 `CollapseStatus`/`CanDecide`）、`backend/internal/model/conflict_check.go`、`backend/internal/service/conflict_service.go`、`backend/internal/service/case_party_service.go`、`backend/internal/repository/conflict_check_repository.go`、`backend/internal/handler/conflict_handler.go`、`backend/internal/constants/{error_codes,messages,log_templates}.go`、`backend/internal/handler/response.go`、`database/init.sql`
+- 前端：`frontend/src/constants/conflict.ts`、`frontend/src/components/common/ConflictStatusBadge.tsx`、`frontend/src/pages/ConflictChecks.tsx`、`frontend/src/types/index.ts`
+- 状态机要点：命中→`pending_review`；管理员带依据→`released`/`rejected`；档案版本变化→`invalidated`（旧放行失效）；重复提交按身份键收口到唯一行/唯一终态。
+
 ## API 接口清单
 
 | 方法 | 路径 | 说明 |
@@ -161,6 +167,15 @@ cy-402/
 | POST | /api/v1/billings/:id/void | 作废账单 |
 | GET | /api/v1/audit-logs | 审计日志（仅管理员） |
 | POST | /api/v1/upload/file | 文件上传 |
+| POST | /api/v1/conflict-checks | 提交新案利益冲突检查（重复提交收口为唯一终态） |
+| GET | /api/v1/conflict-checks | 冲突检查分页列表（可按 status 筛选） |
+| GET | /api/v1/conflict-checks/lookup | 同一入口：按对方姓名/证件号或 check_no 读回唯一结论 |
+| GET | /api/v1/conflict-checks/id/:id | 按 ID 读回结论（读时实时复核档案版本） |
+| POST | /api/v1/conflict-checks/id/:id/release | 管理员填写依据后放行（仅 admin） |
+| POST | /api/v1/conflict-checks/id/:id/reject | 管理员填写依据后驳回（仅 admin） |
+| POST | /api/v1/conflict-checks/cases/:id/parties | 为案件登记本方/对方当事人档案 |
+| GET | /api/v1/conflict-checks/cases/:id/parties | 查询案件当事人档案 |
+| PUT | /api/v1/conflict-checks/parties/:partyId | 更新当事人档案（身份变更触发旧放行失效） |
 
 ## 主要功能
 
@@ -170,6 +185,11 @@ cy-402/
 - 费用结算：创建账单、标记支付、开票、作废，本月应收/已收/待收汇总。
 - 审计日志：写操作自动记录（管理员查看）。
 - 角色权限：JWT + RBAC（admin/lawyer/assistant）。
+- **案源利益冲突检查（新案提交）**：
+  - 提交新案时把客户及联系人记为「本方」，填写「对方姓名 + 证件号」。
+  - 按**证件号或姓名**精确命中事务所现存**未结案件**的对方档案；命中后只能保存为「待复核」，**管理员必须填写依据**才能放行/驳回。
+  - 放行结论**绑定提交时的档案版本（版本号 + 身份指纹）**：对方档案一变化（改名/改证件号/删除/案件已结），旧放行立即失效（`invalidated`），不能再据此办理，需重新复核。
+  - 同一对方身份重复提交**收口为唯一记录、唯一终态**（身份键：有证件号以归一化证件号为准，否则以归一化姓名为准）；结论始终可从同一入口（对方姓名/证件号）读回。
 
 ## License
 
