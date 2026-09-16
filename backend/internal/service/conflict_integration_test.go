@@ -8,6 +8,7 @@ import (
 
 	"cylawcase/internal/constants"
 	"cylawcase/internal/dto"
+	"cylawcase/internal/migration"
 	"cylawcase/internal/model"
 	"cylawcase/internal/repository"
 	"cylawcase/internal/util"
@@ -23,10 +24,7 @@ func newConflictTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(
-		&model.User{}, &model.Client{}, &model.Case{}, &model.Document{}, &model.Billing{}, &model.AuditLog{},
-		&model.CaseParty{}, &model.ConflictCheck{}, &model.ConflictCheckParty{},
-	); err != nil {
+	if err := migration.Run(db, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	sqlDB, _ := db.DB()

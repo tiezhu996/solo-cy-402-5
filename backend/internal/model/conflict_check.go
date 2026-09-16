@@ -9,8 +9,10 @@ import (
 // ConflictCheck 新案案源利益冲突检查记录。
 // 以归一化对方姓名+证件号为唯一业务键（unique_index），同一新案重复提交收口为同一行的唯一终态。
 type ConflictCheck struct {
-	ID          uint64       `gorm:"primaryKey" json:"id"`
-	CheckNo     string       `gorm:"size:50;uniqueIndex;not null" json:"check_no"`
+	ID uint64 `gorm:"primaryKey" json:"id"`
+	// CheckNo 仅声明非空；其唯一约束由 migration 包以「存在性探测 + 加锁幂等」方式显式管理，
+	// 避免旧库已存在同名/异名唯一约束时 GORM AutoMigrate 重复建索引并导致启动反复退出。
+	CheckNo     string       `gorm:"size:50;not null" json:"check_no"`
 	CaseTitle   string       `gorm:"size:200;not null;default:''" json:"case_title"`
 	OurParties  OurPartyJSON `gorm:"type:jsonb;not null;default:'[]'" json:"our_parties"`
 	OppName     string       `gorm:"size:100;not null" json:"opp_name"`

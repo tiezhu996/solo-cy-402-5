@@ -12,7 +12,7 @@ import (
 
 	"cylawcase/internal/config"
 	"cylawcase/internal/handler"
-	"cylawcase/internal/model"
+	"cylawcase/internal/migration"
 	"cylawcase/internal/repository"
 	"cylawcase/internal/router"
 	"cylawcase/internal/service"
@@ -31,11 +31,8 @@ func main() {
 		logger.Error("connect database failed", "error", err.Error())
 		os.Exit(1)
 	}
-	if err := db.AutoMigrate(
-		&model.User{}, &model.Client{}, &model.Case{}, &model.Document{}, &model.Billing{}, &model.AuditLog{},
-		&model.CaseParty{}, &model.ConflictCheck{}, &model.ConflictCheckParty{},
-	); err != nil {
-		logger.Error("auto migrate failed", "error", err.Error())
+	if err := migration.Run(db, logger); err != nil {
+		logger.Error("database migration failed", "error", err.Error())
 		os.Exit(1)
 	}
 	if err := service.NewSeedService(db, logger).Seed(); err != nil {
