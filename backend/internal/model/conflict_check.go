@@ -44,6 +44,8 @@ type ConflictCheck struct {
 	LiveSnapshot PartySnapshotJSON `gorm:"-" json:"live_snapshot,omitempty"`
 	CanProceed   bool              `gorm:"-" json:"can_proceed"`
 	Stale        bool              `gorm:"-" json:"stale"`
+	// HasNewHit 实时命中集合中出现了放行时未绑定的新对方档案（另一未结案件登记了相同姓名/证件号）。
+	HasNewHit bool `gorm:"-" json:"has_new_hit"`
 	// StaleReason 失效原因分类：profile_changed=档案在未结案件中被改动（旧放行失效，须重审）；
 	// cleared=冲突已消除（所冲突案件已结/档案已删除）。
 	StaleReason string `gorm:"-" json:"stale_reason,omitempty"`

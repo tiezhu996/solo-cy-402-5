@@ -301,6 +301,10 @@ func (s *ConflictService) revalidate(chk *model.ConflictCheck) (*model.ConflictC
 
 	var nextStatus string
 	switch {
+	// 命中集合出现放行时未绑定的新对方档案（另一未结案件登记了相同姓名/证件号）：
+	// 旧放行不能再覆盖新冲突，失效并回到待复核。
+	case chk.Status == constants.ConflictStatusReleased && enriched.HasNewHit:
+		nextStatus = constants.ConflictStatusPendingReview
 	case chk.Status == constants.ConflictStatusReleased && enriched.Stale && enriched.StaleReason == model.StaleReasonProfileChanged:
 		nextStatus = constants.ConflictStatusInvalidated
 	case chk.Status == constants.ConflictStatusReleased && enriched.Stale && enriched.StaleReason == model.StaleReasonCleared:
@@ -350,6 +354,7 @@ func (s *ConflictService) enrich(chk *model.ConflictCheck) (*model.ConflictCheck
 	chk.LiveSnapshot = live
 	chk.Stale = false
 	chk.StaleReason = ""
+	chk.HasNewHit = false
 
 	// 只有曾绑定过档案版本的结论（released / 曾命中）才需要版本复核。
 	if len(chk.MatchedSnapshot) == 0 {
@@ -358,9 +363,18 @@ func (s *ConflictService) enrich(chk *model.ConflictCheck) (*model.ConflictCheck
 	}
 
 	// 取绑定档案的现状（含已结案件/已删除的判定）。
+	boundIDSet := make(map[uint64]struct{}, len(chk.MatchedSnapshot))
 	boundIDs := make([]uint64, 0, len(chk.MatchedSnapshot))
 	for _, sp := range chk.MatchedSnapshot {
 		boundIDs = append(boundIDs, sp.PartyID)
+		boundIDSet[sp.PartyID] = struct{}{}
+	}
+	// 实时命中里若出现绑定集合之外的档案，即「命中集合新增」（另一未结案件登记了相同姓名/证件号）。
+	for _, sp := range live {
+		if _, ok := boundIDSet[sp.PartyID]; !ok {
+			chk.HasNewHit = true
+			break
+		}
 	}
 	current, err := s.partyRepo.FindCandidatesByPartyIDs(boundIDs)
 	if err != nil {
@@ -412,7 +426,7 @@ func (s *ConflictService) enrich(chk *model.ConflictCheck) (*model.ConflictCheck
 		}
 	}
 
-	chk.CanProceed = (chk.Status == constants.ConflictStatusReleased && !chk.Stale) ||
+	chk.CanProceed = (chk.Status == constants.ConflictStatusReleased && !chk.Stale && !chk.HasNewHit) ||
 		(chk.Status == constants.ConflictStatusNoConflict && !chk.LiveMatch)
 	return chk, nil
 }

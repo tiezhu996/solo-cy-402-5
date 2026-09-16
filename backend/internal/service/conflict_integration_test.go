@@ -308,6 +308,76 @@ func TestConflictClosedCaseNotMatched(t *testing.T) {
 	}
 }
 
+// TestConflictNewHitOnAnotherCaseReopensRelease 放行后另一未结案件登记相同对方：
+// 命中集合变化，旧放行失效并回到待复核；重复读回稳定且只产生一条结论。
+func TestConflictNewHitOnAnotherCaseReopensRelease(t *testing.T) {
+	env := setupConflict(t)
+	seedOpenCaseWithOpposing(t, env, "C1", "王大明", "440300198505056789")
+
+	chk, err := env.conflictSvc.Submit(submitReq("新案J", "王大明", "440300198505056789"), 9, "lawyer")
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if _, err := env.conflictSvc.Release(chk.ID, "批准接案", 1, "admin"); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	// 另一个未结案件登记了相同姓名+证件号的对方。
+	seedOpenCaseWithOpposing(t, env, "C2", "王大明", "440300198505056789")
+
+	first, err := env.conflictSvc.ReadByIdentity("王大明", "440300198505056789", "")
+	if err != nil {
+		t.Fatalf("read1: %v", err)
+	}
+	if first.Status != constants.ConflictStatusPendingReview || first.CanProceed {
+		t.Fatalf("want pending/not proceed, got %s proceed=%v", first.Status, first.CanProceed)
+	}
+	if first.HitCount != 2 {
+		t.Fatalf("want 2 live hits, got %d", first.HitCount)
+	}
+
+	// 重复读回：状态稳定、不回退为可办理，且结论仍只有一条。
+	second, err := env.conflictSvc.ReadByIdentity("王大明", "440300198505056789", "")
+	if err != nil {
+		t.Fatalf("read2: %v", err)
+	}
+	if second.ID != chk.ID || second.Status != constants.ConflictStatusPendingReview || second.CanProceed {
+		t.Fatalf("repeat read must stay pending on same row, got id=%d %s proceed=%v", second.ID, second.Status, second.CanProceed)
+	}
+	var n int64
+	if err := env.db.Model(&model.ConflictCheck{}).Count(&n).Error; err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("repeat reads must not create extra conclusions, got %d rows", n)
+	}
+}
+
+// TestConflictRejectedStableUnderNewHit 驳回终态在命中集合变化时保持稳定、不可办理、仍唯一。
+func TestConflictRejectedStableUnderNewHit(t *testing.T) {
+	env := setupConflict(t)
+	seedOpenCaseWithOpposing(t, env, "C1", "钱七", "777")
+	chk, err := env.conflictSvc.Submit(submitReq("新案K", "钱七", "777"), 9, "lawyer")
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if _, err := env.conflictSvc.Reject(chk.ID, "直接利益冲突，禁止接案", 1, "admin"); err != nil {
+		t.Fatalf("reject: %v", err)
+	}
+	seedOpenCaseWithOpposing(t, env, "C2", "钱七", "777")
+	got, err := env.conflictSvc.ReadByIdentity("钱七", "777", "")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if got.Status != constants.ConflictStatusRejected || got.CanProceed {
+		t.Fatalf("reject must stay terminal/not proceed, got %s proceed=%v", got.Status, got.CanProceed)
+	}
+	var n int64
+	_ = env.db.Model(&model.ConflictCheck{}).Count(&n).Error
+	if n != 1 {
+		t.Fatalf("must remain single conclusion, got %d", n)
+	}
+}
+
 // TestConflictReleaseBindsCurrentProfileVersion 待复核期间档案已变更：放行锚定到放行时刻版本，可办理。
 func TestConflictReleaseBindsCurrentProfileVersion(t *testing.T) {
 	env := setupConflict(t)

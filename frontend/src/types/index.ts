@@ -128,6 +128,7 @@ export interface ConflictCheck {
   live_snapshot?: PartySnapshot[]
   can_proceed: boolean
   stale: boolean
+  has_new_hit: boolean
 }
 
 export interface CaseParty {
