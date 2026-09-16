@@ -2,6 +2,7 @@ import request from '@/utils/request'
 import type { ConflictCheck } from '@/types'
 
 export interface ConflictSubmitPayload {
+  case_key: string
   case_title: string
   our_parties: { name: string; id_number?: string; contact?: string; party_role?: string }[]
   opp_name: string
@@ -23,8 +24,13 @@ export function getConflict(id: number) {
   return request.get(`/conflict-checks/id/${id}`)
 }
 
-// 从同一入口按对方姓名/证件号或检查单号读回唯一结论。
-export function lookupConflict(params: { opp_name?: string; opp_id_number?: string; check_no?: string }) {
+// 从同一入口按新案编号（精确）或对方姓名/证件号或检查单号读回结论。
+export function lookupConflict(params: {
+  case_key?: string
+  opp_name?: string
+  opp_id_number?: string
+  check_no?: string
+}) {
   return request.get('/conflict-checks/lookup', { params })
 }
 

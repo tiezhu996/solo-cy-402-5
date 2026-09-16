@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -30,8 +31,13 @@ func NewConflictService(repo *repository.ConflictCheckRepository, partyRepo *rep
 	return &ConflictService{repo: repo, partyRepo: partyRepo, db: db, logger: logger}
 }
 
-// Submit 提交新案冲突检查。同一对方身份重复提交收口为唯一记录与唯一终态。
+// Submit 提交新案冲突检查。收口维度是「新案」（case_key）：同一新案重复提交收口为一条结论；
+// 不同新案即使对方姓名/证件号相同，也各自独立成行，互不覆盖。
 func (s *ConflictService) Submit(req dto.ConflictSubmitRequest, submitterID uint64, submitterName string) (*model.ConflictCheck, error) {
+	caseKey := strings.TrimSpace(req.CaseKey)
+	if caseKey == "" {
+		return nil, util.NewAppError(constants.CodeValidationFailed, "ConflictCheck[case_key] submit: case_key required")
+	}
 	normName := conflict.Normalize(req.OppName)
 	normID := conflict.Normalize(req.OppIDNumber)
 	if normName == "" {
@@ -46,23 +52,31 @@ func (s *ConflictService) Submit(req dto.ConflictSubmitRequest, submitterID uint
 		})
 	}
 
-	result, err := s.upsert(identityKey, normName, normID, strings.TrimSpace(req.OppName), strings.TrimSpace(req.OppIDNumber),
-		req.CaseTitle, ours, submitterID, submitterName, false)
-	if err != nil {
-		// 并发提交撞唯一索引：按唯一键回读后，按已存在记录路径再收口一次。
-		if isDuplicateKey(err) {
-			s.logger.Info(constants.LogConflictIdempotentReuse, "identity_key", identityKey)
-			return s.upsert(identityKey, normName, normID, strings.TrimSpace(req.OppName), strings.TrimSpace(req.OppIDNumber),
-				req.CaseTitle, ours, submitterID, submitterName, true)
+	// 并发提交同一新案：事务内查重后仍可能同时 INSERT 撞 case_key 唯一索引。
+	// 败方捕获唯一冲突后按 case_key 回读收口，必要时有限重试，绝不新建重复行或产生重复主键。
+	const maxAttempts = 3
+	var result *model.ConflictCheck
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		forceExisting := attempt > 1
+		var err error
+		result, err = s.upsert(caseKey, identityKey, normName, normID, strings.TrimSpace(req.OppName), strings.TrimSpace(req.OppIDNumber),
+			req.CaseTitle, ours, submitterID, submitterName, forceExisting)
+		if err == nil {
+			return result, nil
 		}
-		s.logger.Error(constants.LogConflictSubmitFailed, "error", err.Error())
-		return nil, util.Wrap(err, "ConflictCheck[opp_name=%s] submit failed", req.OppName)
+		if !isDuplicateKey(err) {
+			s.logger.Error(constants.LogConflictSubmitFailed, "error", err.Error())
+			return nil, util.Wrap(err, "ConflictCheck[case_key=%s] submit failed", caseKey)
+		}
+		s.logger.Info(constants.LogConflictIdempotentReuse, "case_key", caseKey, "attempt", attempt)
 	}
-	return result, nil
+	// 极端并发下重试仍冲突：让调用方稍后重发，不写入任何重复结论。
+	return nil, util.NewAppError(constants.CodeConflictStateConflict,
+		"ConflictCheck[case_key="+caseKey+"] submit: concurrent conflict, please retry")
 }
 
-// upsert 在事务内完成「查重 → 实时匹配 → 收口到唯一终态」。
-func (s *ConflictService) upsert(identityKey, normName, normID, oppName, oppID, title string, ours []model.OurParty,
+// upsert 在事务内完成「按新案查重 → 实时匹配 → 收口到该新案唯一终态」。
+func (s *ConflictService) upsert(caseKey, identityKey, normName, normID, oppName, oppID, title string, ours []model.OurParty,
 	submitterID uint64, submitterName string, forceExisting bool) (*model.ConflictCheck, error) {
 
 	var out *model.ConflictCheck
@@ -82,13 +96,13 @@ func (s *ConflictService) upsert(identityKey, normName, normID, oppName, oppID, 
 		boundVersion, boundFP := conflict.Binding(snapshots)
 		hit := len(hits) > 0
 
-		existing, err := chkRepo.FindByIdentity(identityKey)
+		existing, err := chkRepo.FindByCaseKey(caseKey)
 		if err != nil && err != repository.ErrNotFound {
 			return err
 		}
 		notFound := err == repository.ErrNotFound
 		if notFound && forceExisting {
-			// 理论上不会再 NotFound；若仍未查到则交由上层报错。
+			// 并发撞键回读后仍未查到，交由上层重试/报错，绝不重复插入。
 			return repository.ErrNotFound
 		}
 
@@ -99,6 +113,7 @@ func (s *ConflictService) upsert(identityKey, normName, normID, oppName, oppID, 
 			}
 			chk := &model.ConflictCheck{
 				CheckNo:           genConflictNo(),
+				CaseKey:           caseKey,
 				CaseTitle:         title,
 				OurParties:        model.OurPartyJSON(ours),
 				OppName:           oppName,
@@ -124,18 +139,21 @@ func (s *ConflictService) upsert(identityKey, normName, normID, oppName, oppID, 
 			if hit {
 				tpl = constants.LogConflictSubmitHit
 			}
-			s.logger.Info(tpl, "check_id", chk.ID, "hit", hit)
+			s.logger.Info(tpl, "check_id", chk.ID, "case_key", caseKey, "hit", hit)
 			out = chk
 			return nil
 		}
 
-		// 已存在：刷新提交内容与实时快照，再据状态机收口，保证唯一终态。
+		// 已存在（同一新案重复提交）：仅刷新该案内容与实时快照，再据状态机收口；不触碰其他新案记录。
 		// 先用库中现存的旧绑定判定放行是否仍锚定同一档案版本，再覆盖为本次快照。
 		bindingOK := conflict.BindingUnchanged(existing.BoundPartyVersion, existing.BoundFingerprint, snapshots)
 		existing.CaseTitle = title
 		existing.OurParties = model.OurPartyJSON(ours)
 		existing.OppName = oppName
 		existing.OppIDNumber = oppID
+		existing.IdentityKey = identityKey
+		existing.NormOppName = normName
+		existing.NormOppID = normID
 		existing.HitCount = len(hits)
 		existing.MatchedSnapshot = snapshots
 		existing.BoundPartyVersion = boundVersion
@@ -179,18 +197,21 @@ func (s *ConflictService) Get(id uint64) (*model.ConflictCheck, error) {
 	return s.revalidate(chk)
 }
 
-// ReadByIdentity 从同一入口按对方姓名/证件号读回唯一结论。
-func (s *ConflictService) ReadByIdentity(oppName, oppID, checkNo string) (*model.ConflictCheck, error) {
+// ReadConclusion 读回结论：优先按新案键 case_key 精确读回；其次按检查单号；
+// 仅给对方姓名/证件号时返回该对方最近一条结论（同一对方可能对应多个不同新案）。
+func (s *ConflictService) ReadConclusion(caseKey, oppName, oppID, checkNo string) (*model.ConflictCheck, error) {
 	var chk *model.ConflictCheck
 	var err error
 	switch {
+	case strings.TrimSpace(caseKey) != "":
+		chk, err = s.repo.FindByCaseKey(strings.TrimSpace(caseKey))
 	case strings.TrimSpace(checkNo) != "":
 		chk, err = s.repo.FindByCheckNo(strings.TrimSpace(checkNo))
 	case conflict.Normalize(oppName) != "":
 		key := conflict.IdentityKey(conflict.Normalize(oppName), conflict.Normalize(oppID))
-		chk, err = s.repo.FindByIdentity(key)
+		chk, err = s.repo.FindLatestByIdentity(key)
 	default:
-		return nil, util.NewAppError(constants.CodeBadRequest, "ConflictCheck read: opp_name or check_no required")
+		return nil, util.NewAppError(constants.CodeBadRequest, "ConflictCheck read: case_key or opp_name or check_no required")
 	}
 	if err != nil {
 		return nil, util.Wrap(err, "ConflictCheck read failed")
@@ -437,6 +458,15 @@ func genConflictNo() string {
 }
 
 // isDuplicateKey 识别唯一索引冲突（避免在未开启 TranslateError 时强依赖驱动错误类型）。
+// isDuplicateKey 方言无关地识别唯一约束冲突：Postgres 报 "duplicate key"，
+// SQLite（modernc/mattn）报 "UNIQUE constraint failed"，另兼容 GORM 翻译后的 ErrDuplicatedKey。
 func isDuplicateKey(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "duplicate key")
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, gorm.ErrDuplicatedKey) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "duplicate key") || strings.Contains(msg, "unique constraint failed")
 }

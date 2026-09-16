@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"sync"
 	"testing"
 
 	"cylawcase/internal/constants"
@@ -28,6 +29,8 @@ func newConflictTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("migrate: %v", err)
 	}
 	sqlDB, _ := db.DB()
+	// 单连接：并发请求在连接层排队、整事务串行提交，确定性地验证「同时到达也只出一条且都成功」。
+	// 生产为 PostgreSQL（MVCC），真正的撞键由 case_key 唯一索引 + 提交重试兜底。
 	sqlDB.SetMaxOpenConns(1)
 	t.Cleanup(func() { _ = sqlDB.Close() })
 	return db
@@ -76,6 +79,7 @@ func seedOpenCaseWithOpposing(t *testing.T, env *conflictEnv, caseNo, oppName, o
 
 func submitReq(title, oppName, oppID string) dto.ConflictSubmitRequest {
 	return dto.ConflictSubmitRequest{
+		CaseKey:     "KEY:" + title,
 		CaseTitle:   title,
 		OurParties:  []dto.OurPartyDTO{{Name: "本方客户", IDNumber: "111111"}},
 		OppName:     oppName,
@@ -90,6 +94,98 @@ func appCode(t *testing.T, err error) int {
 		t.Fatalf("expected AppError, got %v", err)
 	}
 	return ae.Code
+}
+
+// TestConflictDifferentCasesSameOpponentStaySeparate 不同新案即使对方姓名/证件号相同，
+// 也必须各自独立成行，标题不互相覆盖、可分别复核。
+func TestConflictDifferentCasesSameOpponentStaySeparate(t *testing.T) {
+	env := setupConflict(t)
+	seedOpenCaseWithOpposing(t, env, "C1", "王大明", "440300198505056789")
+
+	a, err := env.conflictSvc.Submit(submitReq("新案甲", "王大明", "440300198505056789"), 9, "lawyer")
+	if err != nil {
+		t.Fatalf("submit 甲: %v", err)
+	}
+	b, err := env.conflictSvc.Submit(submitReq("新案乙", "王大明", "440300198505056789"), 9, "lawyer")
+	if err != nil {
+		t.Fatalf("submit 乙: %v", err)
+	}
+	if a.ID == b.ID {
+		t.Fatalf("different new cases must not share a row, both id=%d", a.ID)
+	}
+	if a.CaseTitle != "新案甲" || b.CaseTitle != "新案乙" {
+		t.Fatalf("titles must not overwrite each other: %q vs %q", a.CaseTitle, b.CaseTitle)
+	}
+	// 按对方读回应看到多条结论（取最近一条为乙）。
+	var n int64
+	if err := env.db.Model(&model.ConflictCheck{}).Count(&n).Error; err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("want 2 independent conclusions, got %d", n)
+	}
+	latest, err := env.conflictSvc.ReadConclusion("", "王大明", "440300198505056789", "")
+	if err != nil {
+		t.Fatalf("read latest: %v", err)
+	}
+	if latest.ID != b.ID {
+		t.Fatalf("latest by opponent should be case 乙(id=%d), got id=%d", b.ID, latest.ID)
+	}
+	// 按新案键可分别精确读回甲、乙。
+	gotA, err := env.conflictSvc.ReadConclusion("KEY:新案甲", "", "", "")
+	if err != nil {
+		t.Fatalf("read A: %v", err)
+	}
+	if gotA.ID != a.ID || gotA.CaseTitle != "新案甲" {
+		t.Fatalf("read by case_key must isolate A, got id=%d title=%q", gotA.ID, gotA.CaseTitle)
+	}
+}
+
+// TestConflictConcurrentSameCaseCollapsesToOne 同一新案两个请求同时到达：只生成一条结论，
+// 两者都成功收口到同一行，不串案、不产生重复主键。
+func TestConflictConcurrentSameCaseCollapsesToOne(t *testing.T) {
+	env := setupConflict(t)
+	seedOpenCaseWithOpposing(t, env, "C1", "王大明", "440300198505056789")
+
+	req := submitReq("新案并发", "王大明", "4403001985056789")
+	var wg sync.WaitGroup
+	results := make(chan *model.ConflictCheck, 2)
+	errs := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r, err := env.conflictSvc.Submit(req, 9, "lawyer")
+			if err != nil {
+				errs <- err
+				return
+			}
+			results <- r
+		}()
+	}
+	wg.Wait()
+	close(results)
+	close(errs)
+	for e := range errs {
+		t.Fatalf("concurrent submit must not error: %v", e)
+	}
+	ids := map[uint64]struct{}{}
+	for r := range results {
+		ids[r.ID] = struct{}{}
+		if r.CaseTitle != "新案并发" {
+			t.Fatalf("case title串案: %q", r.CaseTitle)
+		}
+	}
+	if len(ids) != 1 {
+		t.Fatalf("concurrent same-case submit must collapse to one row, got ids=%v", ids)
+	}
+	var n int64
+	if err := env.db.Model(&model.ConflictCheck{}).Where("case_key = ?", "KEY:新案并发").Count(&n).Error; err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("want exactly 1 row for the case_key, got %d", n)
+	}
 }
 
 // TestConflictHitMustPendingThenRelease 命中→只能待复核→无依据拒绝→带依据放行→可办理。
@@ -136,8 +232,8 @@ func TestConflictDuplicateSubmitCollapses(t *testing.T) {
 	if _, err := env.conflictSvc.Release(first.ID, "经主任批准", 1, "admin"); err != nil {
 		t.Fatalf("release: %v", err)
 	}
-	// 大小写/空白差异仍是同一身份，且不产生第二条记录。
-	second, err := env.conflictSvc.Submit(submitReq("新案B-改名", " 李 四 ", ""), 9, "lawyer")
+	// 同一新案重复提交（对方姓名的大小写/空白差异归一化），不产生第二条记录。
+	second, err := env.conflictSvc.Submit(submitReq("新案B", " 李 四 ", ""), 9, "lawyer")
 	if err != nil {
 		t.Fatalf("submit2: %v", err)
 	}
@@ -209,7 +305,7 @@ func TestConflictNoConflictBecomesHit(t *testing.T) {
 	// 之后事务所新登记一个未结案件的对方，恰为赵六。
 	seedOpenCaseWithOpposing(t, env, "C9", "赵六", "555")
 
-	recheck, err := env.conflictSvc.ReadByIdentity("赵六", "555", "")
+	recheck, err := env.conflictSvc.ReadConclusion("", "赵六", "555", "")
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -258,7 +354,7 @@ func TestConflictReleasedClearsWhenCaseClosed(t *testing.T) {
 	if err := env.db.Model(c).Update("status", constants.CaseStatusClosed).Error; err != nil {
 		t.Fatalf("close: %v", err)
 	}
-	got, err := env.conflictSvc.ReadByIdentity("周九", "999", "")
+	got, err := env.conflictSvc.ReadConclusion("", "周九", "999", "")
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -276,14 +372,14 @@ func TestConflictLookupFromSameEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	byIdentity, err := env.conflictSvc.ReadByIdentity(" 吴 十 ", "1010", "")
+	byIdentity, err := env.conflictSvc.ReadConclusion("", " 吴 十 ", "1010", "")
 	if err != nil {
 		t.Fatalf("lookup normalized: %v", err)
 	}
 	if byIdentity.ID != chk.ID {
 		t.Fatalf("lookup must read back same record %d vs %d", byIdentity.ID, chk.ID)
 	}
-	byNo, err := env.conflictSvc.ReadByIdentity("", "", chk.CheckNo)
+	byNo, err := env.conflictSvc.ReadConclusion("", "", "", chk.CheckNo)
 	if err != nil {
 		t.Fatalf("lookup by no: %v", err)
 	}
@@ -324,7 +420,7 @@ func TestConflictNewHitOnAnotherCaseReopensRelease(t *testing.T) {
 	// 另一个未结案件登记了相同姓名+证件号的对方。
 	seedOpenCaseWithOpposing(t, env, "C2", "王大明", "440300198505056789")
 
-	first, err := env.conflictSvc.ReadByIdentity("王大明", "440300198505056789", "")
+	first, err := env.conflictSvc.ReadConclusion("", "王大明", "440300198505056789", "")
 	if err != nil {
 		t.Fatalf("read1: %v", err)
 	}
@@ -336,7 +432,7 @@ func TestConflictNewHitOnAnotherCaseReopensRelease(t *testing.T) {
 	}
 
 	// 重复读回：状态稳定、不回退为可办理，且结论仍只有一条。
-	second, err := env.conflictSvc.ReadByIdentity("王大明", "440300198505056789", "")
+	second, err := env.conflictSvc.ReadConclusion("", "王大明", "440300198505056789", "")
 	if err != nil {
 		t.Fatalf("read2: %v", err)
 	}
@@ -364,7 +460,7 @@ func TestConflictRejectedStableUnderNewHit(t *testing.T) {
 		t.Fatalf("reject: %v", err)
 	}
 	seedOpenCaseWithOpposing(t, env, "C2", "钱七", "777")
-	got, err := env.conflictSvc.ReadByIdentity("钱七", "777", "")
+	got, err := env.conflictSvc.ReadConclusion("", "钱七", "777", "")
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}

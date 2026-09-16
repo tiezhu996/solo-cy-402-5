@@ -78,7 +78,7 @@ func (h *ConflictHandler) Get(c *gin.Context) {
 func (h *ConflictHandler) Read(c *gin.Context) {
 	var q dto.ConflictRecheckQuery
 	_ = c.ShouldBindQuery(&q)
-	chk, err := h.svc.ReadByIdentity(q.OppName, q.OppIDNumber, q.CheckNo)
+	chk, err := h.svc.ReadConclusion(q.CaseKey, q.OppName, q.OppIDNumber, q.CheckNo)
 	if err != nil {
 		h.wrapError(c, err, "ConflictCheck read failed")
 		return

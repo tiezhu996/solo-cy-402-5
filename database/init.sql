@@ -96,10 +96,11 @@ ALTER TABLE case_parties
   ADD CONSTRAINT idx_case_party_identity UNIQUE (case_id, side, norm_name, norm_id);
 CREATE INDEX IF NOT EXISTS idx_case_parties_lookup ON case_parties (side, norm_id, norm_name);
 
--- 新案案源利益冲突检查记录；唯一业务键建在归一化列上，重复提交收口为唯一行。
+-- 新案案源利益冲突检查记录；以新案键 case_key 收口同一新案的重复提交；对方身份仅作读回索引。
 CREATE TABLE IF NOT EXISTS conflict_checks (
   id BIGSERIAL PRIMARY KEY,
   check_no VARCHAR(50) NOT NULL,
+  case_key VARCHAR(100) NOT NULL,
   case_title VARCHAR(200) NOT NULL DEFAULT '',
   our_parties JSONB NOT NULL DEFAULT '[]',
   opp_name VARCHAR(100) NOT NULL,
@@ -123,9 +124,11 @@ CREATE TABLE IF NOT EXISTS conflict_checks (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ALTER TABLE conflict_checks ADD CONSTRAINT uni_conflict_check_no UNIQUE (check_no);
--- 关键：同一对方身份（有证件号以证件号为准，否则以姓名为准，均忽略大小写/空白）只有一条结论，承担「唯一终态」收口。
+-- 关键：同一新案（case_key）只有一条结论；不同新案即使对方相同也各自独立。
 ALTER TABLE conflict_checks
-  ADD CONSTRAINT idx_conflict_identity UNIQUE (identity_key);
+  ADD CONSTRAINT idx_conflict_case_key UNIQUE (case_key);
+-- 对方身份仅用于按姓名/证件号读回（同一对方可对应多个新案），建普通索引而非唯一。
+CREATE INDEX IF NOT EXISTS idx_conflict_identity ON conflict_checks (identity_key);
 CREATE INDEX IF NOT EXISTS idx_conflict_status ON conflict_checks (status);
 CREATE INDEX IF NOT EXISTS idx_conflict_norm ON conflict_checks (norm_opp_id, norm_opp_name);
 

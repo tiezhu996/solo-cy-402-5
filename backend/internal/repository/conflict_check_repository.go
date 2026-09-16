@@ -56,15 +56,28 @@ func (r *ConflictCheckRepository) FindByCheckNo(checkNo string) (*model.Conflict
 	return &chk, nil
 }
 
-// FindByIdentity 按身份收口键查询唯一记录（重复提交收口键）。
-func (r *ConflictCheckRepository) FindByIdentity(identityKey string) (*model.ConflictCheck, error) {
+// FindByCaseKey 按新案业务幂等键查询唯一记录（同一新案重复提交收口键）。
+func (r *ConflictCheckRepository) FindByCaseKey(caseKey string) (*model.ConflictCheck, error) {
 	var chk model.ConflictCheck
-	if err := r.db.Where("identity_key = ?", identityKey).
+	if err := r.db.Where("case_key = ?", caseKey).
 		First(&chk).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrNotFound
 		}
-		return nil, fmt.Errorf("find conflict check by identity: %w", err)
+		return nil, fmt.Errorf("find conflict check by case_key: %w", err)
+	}
+	return &chk, nil
+}
+
+// FindLatestByIdentity 按对方身份键查询最近一条结论（同一对方可能对应多个不同新案）。
+func (r *ConflictCheckRepository) FindLatestByIdentity(identityKey string) (*model.ConflictCheck, error) {
+	var chk model.ConflictCheck
+	if err := r.db.Where("identity_key = ?", identityKey).
+		Order("id DESC").First(&chk).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("find latest conflict check by identity: %w", err)
 	}
 	return &chk, nil
 }

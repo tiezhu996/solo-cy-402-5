@@ -129,7 +129,7 @@ cy-402/
 ### ConflictStatus（no_conflict/pending_review/released/rejected/invalidated）
 - 后端：`backend/internal/constants/conflict.go`、`backend/internal/conflict/core.go`（状态收口 `CollapseStatus`/`CanDecide`）、`backend/internal/model/conflict_check.go`、`backend/internal/service/conflict_service.go`、`backend/internal/service/case_party_service.go`、`backend/internal/repository/conflict_check_repository.go`、`backend/internal/handler/conflict_handler.go`、`backend/internal/constants/{error_codes,messages,log_templates}.go`、`backend/internal/handler/response.go`、`database/init.sql`
 - 前端：`frontend/src/constants/conflict.ts`、`frontend/src/components/common/ConflictStatusBadge.tsx`、`frontend/src/pages/ConflictChecks.tsx`、`frontend/src/types/index.ts`
-- 状态机要点：命中→`pending_review`；管理员带依据→`released`/`rejected`；档案版本变化→`invalidated`（旧放行失效）；重复提交按身份键收口到唯一行/唯一终态。
+- 状态机要点：命中→`pending_review`；管理员带依据→`released`/`rejected`；档案版本变化或命中集合出现新档案→旧放行失效并回 `pending_review`/`invalidated`；**收口维度是新案 `case_key`**：同一新案重复提交收口到唯一行/唯一终态，不同新案即使对方相同也各自独立。
 
 ## API 接口清单
 
@@ -167,9 +167,9 @@ cy-402/
 | POST | /api/v1/billings/:id/void | 作废账单 |
 | GET | /api/v1/audit-logs | 审计日志（仅管理员） |
 | POST | /api/v1/upload/file | 文件上传 |
-| POST | /api/v1/conflict-checks | 提交新案利益冲突检查（重复提交收口为唯一终态） |
+| POST | /api/v1/conflict-checks | 提交新案冲突检查（同一新案按 case_key 收口为唯一终态，不同新案各自独立） |
 | GET | /api/v1/conflict-checks | 冲突检查分页列表（可按 status 筛选） |
-| GET | /api/v1/conflict-checks/lookup | 同一入口：按对方姓名/证件号或 check_no 读回唯一结论 |
+| GET | /api/v1/conflict-checks/lookup | 同一入口：按 case_key 精确读回该案；或按对方姓名/证件号返回该对方最近一条、按 check_no 读回 |
 | GET | /api/v1/conflict-checks/id/:id | 按 ID 读回结论（读时实时复核档案版本） |
 | POST | /api/v1/conflict-checks/id/:id/release | 管理员填写依据后放行（仅 admin） |
 | POST | /api/v1/conflict-checks/id/:id/reject | 管理员填写依据后驳回（仅 admin） |
@@ -186,10 +186,10 @@ cy-402/
 - 审计日志：写操作自动记录（管理员查看）。
 - 角色权限：JWT + RBAC（admin/lawyer/assistant）。
 - **案源利益冲突检查（新案提交）**：
-  - 提交新案时把客户及联系人记为「本方」，填写「对方姓名 + 证件号」。
+  - 提交新案时填写稳定的**新案编号 `case_key`** 与名称，把客户及联系人记为「本方」，填写「对方姓名 + 证件号」。
   - 按**证件号或姓名**精确命中事务所现存**未结案件**的对方档案；命中后只能保存为「待复核」，**管理员必须填写依据**才能放行/驳回。
-  - 放行结论**绑定提交时的档案版本（版本号 + 身份指纹）**：对方档案一变化（改名/改证件号/删除/案件已结），旧放行立即失效（`invalidated`），不能再据此办理，需重新复核。
-  - 同一对方身份重复提交**收口为唯一记录、唯一终态**（身份键：有证件号以归一化证件号为准，否则以归一化姓名为准）；结论始终可从同一入口（对方姓名/证件号）读回。
+  - 放行结论**绑定提交时的档案版本（版本号 + 身份指纹）**：对方档案变化（改名/改证件号/删除）或**另一未结案件登记了相同对方**（命中集合新增）时，旧放行立即失效并回到待复核；所冲突案件已结则冲突消除。
+  - **收口维度是新案**：同一新案（相同 `case_key`）重复提交收口为唯一记录、唯一终态；不同新案即使对方姓名/证件号相同也各自独立、互不覆盖；两个请求并发到达由 `case_key` 唯一索引 + 提交重试保证只产生一条。结论可按新案编号精确读回，或按对方姓名/证件号读回该对方最近一条。
 
 ## License
 

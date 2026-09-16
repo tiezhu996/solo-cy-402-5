@@ -103,6 +103,7 @@ export interface PartySnapshot {
 export interface ConflictCheck {
   id: number
   check_no: string
+  case_key: string
   case_title: string
   our_parties: OurParty[]
   opp_name: string

@@ -39,10 +39,16 @@ import type { ConflictCheck, PartySnapshot } from '@/types'
 const { TextArea } = Input
 const { Text, Title } = Typography
 
+// 生成新案业务幂等键：同一新案重复提交复用它以收口到一条结论；登记另一个新案时重新生成。
+function genCaseKey() {
+  return 'NEW-' + Date.now().toString(36).toUpperCase() + '-' + Math.random().toString(36).slice(2, 8).toUpperCase()
+}
+
 export default function ConflictChecks() {
   const isAdmin = useAuthStore((s) => s.user?.role === 'admin')
   const [submitForm] = Form.useForm()
   const [result, setResult] = useState<ConflictCheck | null>(null)
+  const [caseKey, setCaseKey] = useState(genCaseKey())
 
   // 复核队列
   const [list, setList] = useState<ConflictCheck[]>([])
@@ -51,7 +57,8 @@ export default function ConflictChecks() {
   const [pageSize, setPageSize] = useState(10)
   const [statusFilter, setStatusFilter] = useState<string>(ConflictStatus.PENDING_REVIEW)
 
-  // 同入口读回
+  // 同入口读回：优先按新案编号精确读回；仅填对方姓名/证件号时返回该对方最近一条。
+  const [lookupCaseKey, setLookupCaseKey] = useState('')
   const [lookupName, setLookupName] = useState('')
   const [lookupID, setLookupID] = useState('')
 
@@ -84,6 +91,7 @@ export default function ConflictChecks() {
       return
     }
     const res: any = await submitConflict({
+      case_key: caseKey,
       case_title: v.case_title,
       our_parties: ourParties,
       opp_name: v.opp_name,
@@ -91,6 +99,7 @@ export default function ConflictChecks() {
     })
     const chk: ConflictCheck = res.data
     setResult(chk)
+    setLookupCaseKey(chk.case_key)
     setLookupName(chk.opp_name)
     setLookupID(chk.opp_id_number)
     message.success(res.message)
@@ -98,12 +107,25 @@ export default function ConflictChecks() {
     fetchList()
   }
 
+  // 登记另一个新案：生成新的新案键并清空表单，确保与上一个新案各自独立。
+  function startAnotherCase() {
+    const next = genCaseKey()
+    setCaseKey(next)
+    setLookupCaseKey(next)
+    submitForm.resetFields()
+    setResult(null)
+  }
+
   async function onLookup() {
-    if (!lookupName.trim()) {
-      message.warning('请输入对方姓名后再查询')
+    if (!lookupCaseKey.trim() && !lookupName.trim()) {
+      message.warning('请输入新案编号或对方姓名后再查询')
       return
     }
-    const res: any = await lookupConflict({ opp_name: lookupName, opp_id_number: lookupID })
+    const res: any = await lookupConflict({
+      case_key: lookupCaseKey.trim() || undefined,
+      opp_name: lookupName.trim() || undefined,
+      opp_id_number: lookupID.trim() || undefined,
+    })
     setResult(res.data)
   }
 
@@ -130,6 +152,7 @@ export default function ConflictChecks() {
 
   const columns = [
     { title: '单号', dataIndex: 'check_no', width: 150 },
+    { title: '新案编号', dataIndex: 'case_key', width: 170, ellipsis: true },
     { title: '新案名称', dataIndex: 'case_title', ellipsis: true },
     { title: '对方姓名', dataIndex: 'opp_name', width: 110 },
     { title: '对方证件号', dataIndex: 'opp_id_number', width: 190 },
@@ -175,6 +198,12 @@ export default function ConflictChecks() {
         <Col xs={24} lg={11}>
           <Card title="新案提交 · 案源利益冲突检查" size="small">
             <Form form={submitForm} layout="vertical" initialValues={{ our_parties: [{}] }}>
+              <Form.Item label="新案编号（同一新案重复提交保持一致，登记另一新案请更换）">
+                <Space.Compact style={{ width: '100%' }}>
+                  <Input value={caseKey} onChange={(e) => setCaseKey(e.target.value)} placeholder="新案编号" />
+                  <Button onClick={startAnotherCase}>登记另一个新案</Button>
+                </Space.Compact>
+              </Form.Item>
               <Form.Item name="case_title" label="新案名称" rules={[{ required: true, message: '请输入新案名称' }]}>
                 <Input placeholder="例如：与广州恒达物流的货款纠纷" />
               </Form.Item>
@@ -231,21 +260,30 @@ export default function ConflictChecks() {
 
         <Col xs={24} lg={13}>
           <Card
-            title="唯一结论（同一入口读回）"
+            title="结论读回（同一入口）"
             size="small"
             extra={
-              <Space>
+              <Space wrap>
                 <Input
+                  allowClear
+                  placeholder="新案编号（精确）"
+                  value={lookupCaseKey}
+                  onChange={(e) => setLookupCaseKey(e.target.value)}
+                  style={{ width: 170 }}
+                />
+                <Input
+                  allowClear
                   placeholder="对方姓名"
                   value={lookupName}
                   onChange={(e) => setLookupName(e.target.value)}
-                  style={{ width: 130 }}
+                  style={{ width: 120 }}
                 />
                 <Input
+                  allowClear
                   placeholder="对方证件号"
                   value={lookupID}
                   onChange={(e) => setLookupID(e.target.value)}
-                  style={{ width: 180 }}
+                  style={{ width: 160 }}
                 />
                 <Button icon={<SearchOutlined />} onClick={onLookup}>
                   读回
@@ -254,7 +292,9 @@ export default function ConflictChecks() {
             }
           >
             {!result ? (
-              <Text type="secondary">提交或按对方姓名/证件号读回后，在此显示唯一终态结论。</Text>
+              <Text type="secondary">
+                按「新案编号」精确读回该案结论；仅填对方姓名/证件号时返回该对方最近一条（同一对方可能对应多个不同新案）。
+              </Text>
             ) : (
               <ResultPanel check={result} isAdmin={isAdmin} onReview={openReview} />
             )}
@@ -360,6 +400,9 @@ function ResultPanel({
       )}
 
       <Descriptions size="small" column={2} bordered>
+        <Descriptions.Item label="新案编号" span={2}>
+          {check.case_key}
+        </Descriptions.Item>
         <Descriptions.Item label="新案名称" span={2}>
           {check.case_title}
         </Descriptions.Item>

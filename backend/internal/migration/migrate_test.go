@@ -50,7 +50,7 @@ func TestMigrationCreatesCheckNoUnique(t *testing.T) {
 
 	mk := func(no string) *model.ConflictCheck {
 		return &model.ConflictCheck{
-			CheckNo: no, CaseTitle: "t", OppName: "对方" + no,
+			CheckNo: no, CaseKey: "case-" + no, CaseTitle: "t", OppName: "对方" + no,
 			IdentityKey: "k" + no, NormOppName: "n" + no,
 			Status: constants.ConflictStatusPendingReview,
 		}
@@ -66,11 +66,18 @@ func TestMigrationCreatesCheckNoUnique(t *testing.T) {
 		t.Fatalf("expected unique violation, got: %v", err)
 	}
 
-	// identity_key 唯一约束同样建出（重复提交收口键）。
-	dupIdentity := mk("CF-2")
-	dupIdentity.IdentityKey = "kCF-1"
-	if err := db.Create(dupIdentity).Error; err == nil {
-		t.Fatal("duplicate identity_key must be rejected")
+	// case_key 唯一约束建出（同一新案收口键）。
+	dupCase := mk("CF-2")
+	dupCase.CaseKey = "case-CF-1"
+	if err := db.Create(dupCase).Error; err == nil {
+		t.Fatal("duplicate case_key must be rejected")
+	}
+
+	// identity_key 不再唯一：不同新案允许同一对方身份。
+	sameOpp := mk("CF-3")
+	sameOpp.IdentityKey = "kCF-1"
+	if err := db.Create(sameOpp).Error; err != nil {
+		t.Fatalf("different cases may share opponent identity, got: %v", err)
 	}
 }
 
@@ -80,7 +87,7 @@ func TestMigrationDoesNotTouchRows(t *testing.T) {
 	db := openMigratedDB(t, dsn)
 
 	row := &model.ConflictCheck{
-		CheckNo: "CF-KEEP", CaseTitle: "保留案件", OppName: "王大明",
+		CheckNo: "CF-KEEP", CaseKey: "case-keep", CaseTitle: "保留案件", OppName: "王大明",
 		OppIDNumber: "440300198505056789", IdentityKey: "id:440300198505056789",
 		NormOppName: "王大明", NormOppID: "440300198505056789",
 		Status: constants.ConflictStatusReleased, ReviewBasis: "原始依据",

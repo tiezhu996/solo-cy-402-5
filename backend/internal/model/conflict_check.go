@@ -12,14 +12,16 @@ type ConflictCheck struct {
 	ID uint64 `gorm:"primaryKey" json:"id"`
 	// CheckNo 仅声明非空；其唯一约束由 migration 包以「存在性探测 + 加锁幂等」方式显式管理，
 	// 避免旧库已存在同名/异名唯一约束时 GORM AutoMigrate 重复建索引并导致启动反复退出。
-	CheckNo     string       `gorm:"size:50;not null" json:"check_no"`
+	CheckNo string `gorm:"size:50;not null" json:"check_no"`
+	// CaseKey 新案业务幂等键（事务所对该新案的稳定编号）。同一新案重复提交复用它收口到一条结论；
+	// 不同新案即使对方相同，CaseKey 不同也各自独立成行，避免串案覆盖。
+	CaseKey     string       `gorm:"size:100;not null;uniqueIndex:idx_conflict_case_key" json:"case_key"`
 	CaseTitle   string       `gorm:"size:200;not null;default:''" json:"case_title"`
 	OurParties  OurPartyJSON `gorm:"type:jsonb;not null;default:'[]'" json:"our_parties"`
 	OppName     string       `gorm:"size:100;not null" json:"opp_name"`
 	OppIDNumber string       `gorm:"size:50;not null;default:''" json:"opp_id_number"`
-	// 身份收口键：有证件号时取归一化证件号（法定身份标识），否则取归一化姓名。
-	// 同一身份只允许一条结论，重复提交据此收口为唯一行/唯一终态。
-	IdentityKey string `gorm:"size:100;not null;uniqueIndex:idx_conflict_identity" json:"identity_key"`
+	// IdentityKey 为对方身份键（有证件号以证件号为准，否则姓名），仅用于按对方读回，允许同一对方对应多个新案。
+	IdentityKey string `gorm:"size:100;not null;index" json:"identity_key"`
 	NormOppName string `gorm:"size:100;not null;index" json:"norm_opp_name"`
 	NormOppID   string `gorm:"size:50;not null;default:'';index" json:"norm_opp_id"`
 	Status      string `gorm:"size:30;not null;default:pending_review;index" json:"status"`
